@@ -1,0 +1,97 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { font-family: 'Inter', system-ui, sans-serif; }
+  body {
+    background-color: #0A0B0F;
+    color: #F1F5F9;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: #12141A; }
+  ::-webkit-scrollbar-thumb { background: #2D3150; border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: #6366F1; }
+}
+
+@layer components {
+  .glass-card {
+    background: rgba(18, 20, 26, 0.8);
+    border: 1px solid rgba(99, 102, 241, 0.12);
+    backdrop-filter: blur(12px);
+    border-radius: 12px;
+  }
+  .metric-card {
+    @apply glass-card p-5 transition-all duration-200 hover:border-primary/30;
+  }
+  .btn-primary {
+    @apply bg-primary hover:bg-primary-dark text-white font-medium px-4 py-2 rounded-lg transition-all duration-200 hover:shadow-glow;
+  }
+  .btn-ghost {
+    @apply text-muted hover:text-white hover:bg-subtle px-4 py-2 rounded-lg transition-all duration-200;
+  }
+  .badge {
+    @apply inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-xs font-medium;
+  }
+  .badge-success { @apply badge bg-success/15 text-success; }
+  .badge-warning { @apply badge bg-warning/15 text-warning; }
+  .badge-danger  { @apply badge bg-danger/15 text-danger; }
+  .badge-primary { @apply badge bg-primary/15 text-primary-light; }
+  .badge-muted   { @apply badge bg-subtle text-muted; }
+
+  .status-dot {
+    @apply w-2 h-2 rounded-full;
+  }
+  .status-dot-green  { @apply status-dot bg-success animate-pulse-slow; }
+  .status-dot-amber  { @apply status-dot bg-warning animate-pulse-slow; }
+  .status-dot-red    { @apply status-dot bg-danger; }
+  .status-dot-muted  { @apply status-dot bg-muted; }
+
+  .nav-item {
+    @apply flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-muted
+           hover:text-white hover:bg-subtle transition-all duration-150 cursor-pointer;
+  }
+  .nav-item-active {
+    @apply nav-item text-white bg-primary/15 border border-primary/20;
+  }
+
+  .table-row {
+    @apply border-b border-bg-border hover:bg-subtle/50 transition-colors duration-100;
+  }
+
+  .agent-node {
+    @apply glass-card p-4 flex flex-col items-center gap-2 cursor-default transition-all duration-200;
+  }
+  .agent-node:hover { border-color: rgba(99,102,241,0.4); box-shadow: 0 0 20px rgba(99,102,241,0.15); }
+}
+
+/* Pipeline connector lines */
+.pipeline-connector {
+  position: relative;
+}
+.pipeline-connector::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  right: -20px;
+  width: 20px;
+  height: 2px;
+  background: linear-gradient(90deg, #6366F1, transparent);
+}
+
+/* Glow effect on metric values */
+.value-glow {
+  text-shadow: 0 0 20px currentColor;
+}
+
+/* Chart tooltip override */
+.recharts-tooltip-wrapper .recharts-default-tooltip {
+  background: #12141A !important;
+  border: 1px solid #1E2230 !important;
+  border-radius: 8px !important;
+  color: #F1F5F9 !important;
+}
