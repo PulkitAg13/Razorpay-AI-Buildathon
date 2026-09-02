@@ -30,7 +30,7 @@ async def list_cases(
     db: AsyncSession = Depends(get_db),
 ):
     """Paginated list of recovery cases."""
-    q = select(RecoveryCase).order_by(RecoveryCase.started_at.desc())
+    q = select(RecoveryCase).order_by(RecoveryCase.id.desc())
 
     if status:
         q = q.where(RecoveryCase.status == status)
@@ -88,6 +88,181 @@ async def get_case(case_id: str, db: AsyncSession = Depends(get_db)):
         case_dict["outcome"] = outcome.to_dict()
 
     return case_dict
+
+
+@router.post("/{case_id}/retry")
+async def retry_case(case_id: str, db: AsyncSession = Depends(get_db)):
+    """
+    Run an immediate recovery retry on an actionable pending or failed recovery case.
+    Executes deterministic simulation, transitions state, logs audit, and updates live feed.
+    """
+    import json
+    from datetime import datetime, timezone
+    from app.models.audit_log import AuditLog
+    from app.models.outcome import Outcome
+    from app.simulation.engine import deterministic_roll
+    from app.eventbus import get_event_bus
+
+    result = await db.execute(
+        select(RecoveryCase).where(RecoveryCase.case_id == case_id)
+    )
+    case = result.scalar_one_or_none()
+    if not case:
+        raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
+
+    # Determine recovery success using deterministic hash
+    amount = case.revenue_at_risk or 5000.0
+    roll = deterministic_roll(case_id, "manual_retry")
+    # 78% retry success probability for pending/scheduled actions
+    success = roll < 0.78
+
+    if success:
+        case.status = "RECOVERED"
+        case.outcome_status = "RECOVERED"
+        case.recovered_amount = amount
+    else:
+        case.status = "FAILED"
+        case.outcome_status = "NOT_RECOVERED"
+
+    case.completed_at = datetime.now(timezone.utc)
+
+    # Upsert outcome
+    outcome_result = await db.execute(
+        select(Outcome).where(Outcome.case_id == case_id)
+    )
+    outcome = outcome_result.scalar_one_or_none()
+    if outcome:
+        outcome.status = case.outcome_status
+        outcome.recovered_amount = case.recovered_amount
+        outcome.net_recovered = case.recovered_amount - (outcome.recovery_cost or 15.0)
+    else:
+        outcome = Outcome(
+            case_id=case_id,
+            status=case.outcome_status,
+            recovered_amount=case.recovered_amount,
+            recovery_cost=15.0,
+            net_recovered=case.recovered_amount - 15.0,
+            recovery_time_seconds=8.0,
+            strategy_used="MANUAL_RETRY",
+            notes="Manual recovery retry executed by operator.",
+            expected_recovery_value=amount * 0.75,
+        )
+        db.add(outcome)
+
+    # Audit log entry
+    audit = AuditLog(
+        case_id=case_id,
+        agent_name="recovery_execution",
+        step_index=8,
+        decision="RECOVERED" if success else "RETRY_FAILED",
+        reasoning=f"Operator triggered manual recovery retry. Outcome: {case.status}.",
+        confidence=0.85,
+        decision_source="DETERMINISTIC",
+        llm_used=0,
+        used_fallback=0,
+        input_json=json.dumps({"action": "manual_retry", "amount": amount}),
+        output_json=json.dumps({"success": success, "status": case.status, "recovered_amount": case.recovered_amount}),
+        duration_ms=15.0,
+    )
+    db.add(audit)
+    await db.commit()
+
+    # Publish live event
+    try:
+        bus = get_event_bus()
+        await bus.publish("live_feed", {
+            "type": "case_resolved",
+            "case_id": case_id,
+            "status": case.status,
+            "outcome": case.outcome_status,
+            "recovered_amount": case.recovered_amount,
+            "duration_seconds": 0.5,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception:
+        pass
+
+    return {
+        "message": f"Case retry executed: {case.status}",
+        "case_id": case_id,
+        "status": case.status,
+        "recovered_amount": case.recovered_amount,
+    }
+
+
+@router.post("/{case_id}/stop")
+async def stop_case(case_id: str, db: AsyncSession = Depends(get_db)):
+    """
+    Manually stop and close a recovery case.
+    """
+    import json
+    from datetime import datetime, timezone
+    from app.models.audit_log import AuditLog
+    from app.models.outcome import Outcome
+    from app.eventbus import get_event_bus
+
+    result = await db.execute(
+        select(RecoveryCase).where(RecoveryCase.case_id == case_id)
+    )
+    case = result.scalar_one_or_none()
+    if not case:
+        raise HTTPException(status_code=404, detail=f"Case {case_id} not found")
+
+    case.status = "STOPPED"
+    case.outcome_status = "STOPPED"
+    case.completed_at = datetime.now(timezone.utc)
+
+    # Upsert outcome
+    outcome_result = await db.execute(
+        select(Outcome).where(Outcome.case_id == case_id)
+    )
+    outcome = outcome_result.scalar_one_or_none()
+    if outcome:
+        outcome.status = "STOPPED"
+    else:
+        outcome = Outcome(
+            case_id=case_id,
+            status="STOPPED",
+            recovered_amount=0.0,
+            recovery_cost=0.0,
+            net_recovered=0.0,
+            recovery_time_seconds=0.0,
+            strategy_used="STOP_RECOVERY",
+            notes="Case stopped by operator.",
+        )
+        db.add(outcome)
+
+    # Audit log
+    audit = AuditLog(
+        case_id=case_id,
+        agent_name="compliance_policy_guardian",
+        step_index=7,
+        decision="STOPPED_BY_OPERATOR",
+        reasoning="Recovery halted manually by operator.",
+        confidence=1.0,
+        decision_source="DETERMINISTIC",
+        llm_used=0,
+        used_fallback=0,
+        duration_ms=5.0,
+    )
+    db.add(audit)
+    await db.commit()
+
+    try:
+        bus = get_event_bus()
+        await bus.publish("live_feed", {
+            "type": "case_resolved",
+            "case_id": case_id,
+            "status": "STOPPED",
+            "outcome": "STOPPED",
+            "recovered_amount": 0.0,
+            "duration_seconds": 0.1,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        })
+    except Exception:
+        pass
+
+    return {"message": "Case stopped", "case_id": case_id, "status": "STOPPED"}
 
 
 class SimulateCaseRequest(BaseModel):

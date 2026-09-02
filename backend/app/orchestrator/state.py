@@ -36,12 +36,14 @@ class RecoveryWorkflowState(TypedDict, total=False):
     learning_update: Optional[dict[str, Any]]
 
     # ── Summary Fields ────────────────────────────────────────────────────────
+    status: Optional[str]
     root_cause: Optional[str]
     recommended_strategy: Optional[str]
     policy_approved: bool
     human_escalation_required: bool
     outcome_status: Optional[str]
     recovered_amount: float
+    audit_entries: Optional[list[dict[str, Any]]]
 
     # ── Control Flow ──────────────────────────────────────────────────────────
     current_step: str

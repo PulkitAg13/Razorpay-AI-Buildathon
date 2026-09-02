@@ -12,7 +12,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-from app.simulation.engine import SimulationEngine
+from app.simulation.engine import SimulationEngine, deterministic_roll
 
 logger = logging.getLogger(__name__)
 _sim = SimulationEngine()
@@ -27,18 +27,19 @@ async def retry_payment(
 ) -> dict[str, Any]:
     """
     Immediately retry a failed payment.
-    Outcome determined by the simulation engine.
+    Outcome determined by the simulation engine using deterministic hashing.
     """
     logger.info(f"[TOOL:retry_payment] case={case_id} amount=₹{amount:,.0f}")
     success, prob = _sim.simulate_payment_retry(
         amount=amount,
         payment_method=payment_method,
         root_cause=root_cause,
+        case_id=case_id,
     )
     return {
         "tool": "retry_payment",
         "success": success,
-        "transaction_id": str(uuid.uuid4()) if success else None,
+        "transaction_id": f"pay_{uuid.uuid4().hex[:12]}" if success else None,
         "amount": amount,
         "payment_method": payment_method,
         "probability_used": prob,
@@ -67,16 +68,17 @@ async def schedule_retry(
         payment_method=payment_method,
         root_cause=root_cause,
         success_bonus=bonus,
+        case_id=case_id,
     )
     scheduled_time = datetime.now(timezone.utc)
     return {
         "tool": "schedule_retry",
-        "success": True,  # Scheduling always succeeds; outcome pending
+        "success": True,  # Scheduling succeeds; action queued
         "scheduled_transaction_id": f"sched_{uuid.uuid4().hex[:8]}",
         "scheduled_at_hours_from_now": delay_hours,
         "expected_outcome": "success" if success else "likely_failure",
         "simulation_probability": prob + bonus,
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": scheduled_time.isoformat(),
         "simulation": True,
     }
 
@@ -95,8 +97,10 @@ async def generate_payment_link(
     link_id = uuid.uuid4().hex[:12].upper()
     # Link click probability depends on amount (lower for very high amounts)
     click_prob = max(0.35, 0.75 - (amount / 200000))
-    clicked = random.random() < click_prob
-    paid = clicked and random.random() < 0.72
+    clicked_roll = deterministic_roll(case_id, "link_click")
+    clicked = clicked_roll < click_prob
+    paid_roll = deterministic_roll(case_id, "link_paid")
+    paid = clicked and (paid_roll < 0.72)
 
     return {
         "tool": "generate_payment_link",

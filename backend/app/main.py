@@ -150,6 +150,7 @@ app.include_router(ws_router)
 
 
 @app.get("/api/health")
+@app.get("/health")
 async def health():
     from app.llm import get_llm_provider
     return {

@@ -7,10 +7,11 @@ Only the Recovery Execution Agent is permitted to call these.
 from __future__ import annotations
 
 import logging
-import random
 import uuid
 from datetime import datetime, timezone
 from typing import Any
+
+from app.simulation.engine import deterministic_roll
 
 logger = logging.getLogger(__name__)
 
@@ -33,9 +34,9 @@ async def send_whatsapp(
     read_prob = delivery_prob * max(0.20, 0.75 - fatigue_score * 0.4)
     response_prob = read_prob * max(0.10, 0.60 - fatigue_score * 0.5)
 
-    delivered = random.random() < delivery_prob
-    read = delivered and random.random() < 0.75
-    customer_responded = read and random.random() < response_prob
+    delivered = deterministic_roll(case_id, "wa_deliv") < delivery_prob
+    read = delivered and (deterministic_roll(case_id, "wa_read") < 0.75)
+    customer_responded = read and (deterministic_roll(case_id, "wa_resp") < response_prob)
 
     return {
         "tool": "send_whatsapp",
@@ -70,9 +71,9 @@ async def send_email(
     open_prob = max(0.10, 0.35 - fatigue_score * 0.2)
     click_prob = open_prob * max(0.10, 0.45 - fatigue_score * 0.3)
 
-    delivered = random.random() < delivery_prob
-    opened = delivered and random.random() < open_prob
-    clicked = opened and random.random() < click_prob
+    delivered = deterministic_roll(case_id, "em_deliv") < delivery_prob
+    opened = delivered and (deterministic_roll(case_id, "em_open") < open_prob)
+    clicked = opened and (deterministic_roll(case_id, "em_click") < click_prob)
 
     return {
         "tool": "send_email",

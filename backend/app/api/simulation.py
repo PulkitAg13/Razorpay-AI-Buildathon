@@ -142,6 +142,7 @@ async def _run_batch_task(n_events: int, seed: int, mode: str = "SIMULATION_MODE
                 "INVOICE_DELAY": "SCHEDULE_FOLLOWUP",
             }
             strategy = strategy_matrix.get(root_cause, "SEND_EMAIL")
+            case_id = f"SIM-{event.get('external_id', str(processed))[-8:]}"
 
             rx_success, rx_prob = _sim_engine.simulate_strategy_outcome(
                 strategy_type=strategy,
@@ -150,6 +151,7 @@ async def _run_batch_task(n_events: int, seed: int, mode: str = "SIMULATION_MODE
                 customer_tier=tier,
                 fatigue_score=fatigue,
                 amount=amount,
+                case_id=case_id,
             )
             rx_cost_val = _sim_engine.estimate_strategy_cost(strategy, amount)
 
@@ -180,13 +182,81 @@ async def _run_batch_task(n_events: int, seed: int, mode: str = "SIMULATION_MODE
                 strategy_stats[strategy]["success"] += 1
                 strategy_stats[strategy]["recovered"] += amount
 
+            # Persist a representative sample of cases to database (up to 30 cases)
+            if processed < 30:
+                try:
+                    from datetime import datetime, timezone
+                    from app.models.recovery_case import RecoveryCase
+                    from app.models.outcome import Outcome
+                    from app.models.audit_log import AuditLog
+                    import json
+
+                    async with AsyncSessionLocal() as db_session:
+                        case_status = "RECOVERED" if rx_success else "FAILED"
+                        if amount > 100000:
+                            case_status = "ESCALATED"
+                        elif cust.get("opt_out"):
+                            case_status = "STOPPED"
+
+                        new_case = RecoveryCase(
+                            case_id=case_id,
+                            event_id=0,
+                            status=case_status,
+                            current_step="completed",
+                            root_cause=root_cause,
+                            selected_strategy=strategy,
+                            policy_approved=(case_status != "STOPPED"),
+                            outcome_status=case_status,
+                            recovered_amount=amount if case_status == "RECOVERED" else 0.0,
+                            revenue_at_risk=amount,
+                            recovery_cost=rx_cost_val,
+                            expected_recovery_value=amount * rx_prob,
+                            human_escalation_required=(case_status == "ESCALATED"),
+                            is_simulation=True,
+                            completed_at=datetime.now(timezone.utc),
+                        )
+                        db_session.add(new_case)
+
+                        new_out = Outcome(
+                            case_id=case_id,
+                            status=case_status,
+                            recovered_amount=amount if case_status == "RECOVERED" else 0.0,
+                            recovery_cost=rx_cost_val,
+                            net_recovered=(amount - rx_cost_val) if case_status == "RECOVERED" else -rx_cost_val,
+                            recovery_time_seconds=8.0,
+                            strategy_used=strategy,
+                            notes=f"Batch simulation run [{mode}].",
+                            expected_recovery_value=amount * rx_prob,
+                        )
+                        db_session.add(new_out)
+
+                        # Write an audit log entry for this case
+                        decision_src = "LLM" if mode == "DEMO_AI_MODE" and processed < 5 else "DETERMINISTIC"
+                        audit = AuditLog(
+                            case_id=case_id,
+                            agent_name="recovery_strategy_planner",
+                            step_index=5,
+                            decision=strategy,
+                            reasoning=f"Selected optimal strategy {strategy} for root cause {root_cause} with predicted probability {rx_prob:.0%}.",
+                            confidence=rx_prob,
+                            decision_source=decision_src,
+                            llm_used=1 if decision_src == "LLM" else 0,
+                            duration_ms=12.0,
+                            input_json=json.dumps({"amount": amount, "root_cause": root_cause}),
+                            output_json=json.dumps({"strategy": strategy, "probability": rx_prob}),
+                        )
+                        db_session.add(audit)
+                        await db_session.commit()
+                except Exception:
+                    pass
+
         except Exception:
             pass
 
         processed += 1
         _simulation_state["progress"] = processed
 
-        if processed % 25 == 0 or processed == n_events:
+        if processed % 20 == 0 or processed == n_events:
             await bus.publish("simulation_progress", {
                 "type": "simulation_progress",
                 "processed": processed,

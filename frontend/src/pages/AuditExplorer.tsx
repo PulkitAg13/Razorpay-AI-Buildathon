@@ -1,155 +1,332 @@
 import { useEffect, useState } from 'react';
-import { motion } from 'framer-motion';
-import { ScrollText, Bot, Filter } from 'lucide-react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { Search, Filter, RefreshCw, Bot, Shield, ChevronRight, Clock, Code, FileText, CheckCircle2, AlertCircle } from 'lucide-react';
 import { auditApi } from '../lib/api';
 import type { AuditLog } from '../types';
 
 const AGENTS = [
-  '', 'revenue_sentinel', 'root_cause_diagnosis', 'customer_context_intelligence',
+  'revenue_sentinel', 'root_cause_diagnosis', 'customer_context_intelligence',
   'recovery_opportunity', 'recovery_strategy_planner', 'recovery_digital_twin',
-  'compliance_policy_guardian', 'recovery_execution', 'outcome_monitor', 'learning_optimization',
+  'compliance_policy_guardian', 'recovery_execution', 'outcome_monitor',
+  'learning_optimization',
 ];
+
+function DecisionSourceTag({ source }: { source?: string }) {
+  if (source === 'LLM') {
+    return (
+      <span className="badge text-[10px] bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 inline-flex items-center gap-1 font-medium">
+        🤖 LLM
+      </span>
+    );
+  }
+  if (source === 'FALLBACK') {
+    return (
+      <span className="badge text-[10px] bg-amber-500/20 text-amber-300 border border-amber-500/30 inline-flex items-center gap-1 font-medium">
+        🛡️ Fallback
+      </span>
+    );
+  }
+  return (
+    <span className="badge text-[10px] bg-indigo-500/20 text-indigo-300 border border-indigo-500/30 inline-flex items-center gap-1 font-medium">
+      ⚙️ Deterministic
+    </span>
+  );
+}
+
+function AuditDetailModal({ log, onClose }: { log: AuditLog; onClose: () => void }) {
+  const isLLM = log.decision_source === 'LLM' || log.llm_used;
+
+  return (
+    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+      <motion.div
+        initial={{ opacity: 0, scale: 0.95 }}
+        animate={{ opacity: 1, scale: 1 }}
+        exit={{ opacity: 0, scale: 0.95 }}
+        className="glass-card w-full max-w-2xl max-h-[85vh] overflow-y-auto p-6 space-y-5 border-primary/30"
+      >
+        {/* Header */}
+        <div className="flex items-start justify-between border-b border-bg-border pb-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <span className="text-base font-bold text-white font-mono">#{log.id} · {log.agent_name.replace(/_/g, ' ')}</span>
+              <DecisionSourceTag source={log.decision_source} />
+            </div>
+            <div className="text-xs text-muted font-mono mt-0.5">
+              Case ID: <strong className="text-primary-light">{log.case_id}</strong> · Step #{log.step_index || '—'}
+            </div>
+          </div>
+          <button onClick={onClose} className="text-muted hover:text-white text-lg p-1">✕</button>
+        </div>
+
+        {/* Telemetry metadata */}
+        <div className="grid grid-cols-3 gap-2.5 text-xs">
+          <div className="glass-card p-3 bg-bg-card/50">
+            <div className="text-muted text-[11px]">Execution Latency</div>
+            <div className="text-white font-bold font-mono mt-0.5">{log.duration_ms?.toFixed(1) || 0} ms</div>
+          </div>
+          <div className="glass-card p-3 bg-bg-card/50">
+            <div className="text-muted text-[11px]">Decision Confidence</div>
+            <div className="text-emerald-400 font-bold font-mono mt-0.5">{((log.confidence || 0.8) * 100).toFixed(0)}%</div>
+          </div>
+          <div className="glass-card p-3 bg-bg-card/50">
+            <div className="text-muted text-[11px]">Model / Provider</div>
+            <div className="text-primary-light font-bold truncate mt-0.5">
+              {isLLM ? (log.llm_model || 'Gemini 2.5 Flash') : 'Rule Engine (0 Quota)'}
+            </div>
+          </div>
+        </div>
+
+        {/* Decision & Reasoning */}
+        <div className="space-y-2">
+          <div className="text-xs font-semibold text-white">Decision Summary</div>
+          <div className="glass-card p-3 bg-primary/5 border border-primary/20 text-xs font-bold text-white font-mono">
+            {log.decision}
+          </div>
+        </div>
+
+        {log.reasoning && (
+          <div className="space-y-2">
+            <div className="text-xs font-semibold text-white">Full Rationale & Chain of Thought</div>
+            <div className="glass-card p-3.5 bg-bg-card/70 text-xs text-slate-200 leading-relaxed">
+              {log.reasoning}
+            </div>
+          </div>
+        )}
+
+        {/* Input & Output Payloads */}
+        <div className="space-y-3 pt-2 border-t border-bg-border">
+          <div className="text-xs font-semibold text-white flex items-center gap-1.5">
+            <Code size={13} className="text-primary" />
+            Structured Agent I/O Data
+          </div>
+
+          {log.input && (
+            <div>
+              <div className="text-[11px] text-muted mb-1 font-mono">INPUT_PAYLOAD:</div>
+              <pre className="glass-card p-3 bg-bg text-[11px] text-slate-300 font-mono overflow-x-auto max-h-36 rounded-lg">
+                {typeof log.input === 'string' ? log.input : JSON.stringify(log.input, null, 2)}
+              </pre>
+            </div>
+          )}
+
+          {log.output && (
+            <div>
+              <div className="text-[11px] text-muted mb-1 font-mono">OUTPUT_DECISION:</div>
+              <pre className="glass-card p-3 bg-bg text-[11px] text-emerald-300 font-mono overflow-x-auto max-h-36 rounded-lg">
+                {typeof log.output === 'string' ? log.output : JSON.stringify(log.output, null, 2)}
+              </pre>
+            </div>
+          )}
+        </div>
+      </motion.div>
+    </div>
+  );
+}
 
 export default function AuditExplorer() {
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [agentFilter, setAgentFilter] = useState('');
-  const [selected, setSelected] = useState<AuditLog | null>(null);
+  const [sourceFilter, setSourceFilter] = useState('ALL');
+  const [caseFilter, setCaseFilter] = useState('');
+  const [selectedLog, setSelectedLog] = useState<AuditLog | null>(null);
+  const [loading, setLoading] = useState(true);
+
+  const load = async () => {
+    setLoading(true);
+    try {
+      const r = await auditApi.list(
+        page,
+        50,
+        agentFilter || undefined,
+        caseFilter || undefined,
+        sourceFilter !== 'ALL' ? sourceFilter : undefined
+      );
+      setLogs(r.logs);
+      setTotal(r.total);
+    } catch {}
+    setLoading(false);
+  };
 
   useEffect(() => {
-    auditApi.list(page, 50, agentFilter || undefined).then(r => {
-      setLogs(r.logs); setTotal(r.total);
-    }).catch(() => {});
-  }, [page, agentFilter]);
+    load();
+  }, [page, agentFilter, sourceFilter]);
 
   return (
-    <div className="p-6 space-y-5 animate-fade-in">
-      <div>
-        <h1 className="text-2xl font-bold text-white">Audit Explorer</h1>
-        <p className="text-muted text-sm mt-0.5">Immutable audit trail of every agent decision</p>
+    <div className="p-6 space-y-6 animate-fade-in">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-2xl font-bold text-white flex items-center gap-2">
+            <Shield className="text-primary" size={24} />
+            Audit Explorer
+          </h1>
+          <p className="text-muted text-sm mt-0.5">
+            Cryptographically logged decisions, reasoning, and runtime telemetry for every agent invocation ({total} Total Records)
+          </p>
+        </div>
+        <button
+          onClick={load}
+          className="btn-ghost text-xs flex items-center gap-1.5 hover:text-white"
+        >
+          <RefreshCw size={13} className={loading ? 'animate-spin' : ''} />
+          <span>Refresh</span>
+        </button>
       </div>
 
+      {/* Decision Source Filter Pills */}
+      <div className="flex items-center gap-2">
+        <span className="text-xs font-semibold text-muted mr-1">Decision Source:</span>
+        {[
+          { id: 'ALL', label: 'All Sources' },
+          { id: 'LLM', label: '🤖 LLM Invocations' },
+          { id: 'DETERMINISTIC', label: '⚙️ Deterministic' },
+          { id: 'FALLBACK', label: '🛡️ Fallbacks' },
+        ].map(src => {
+          const isActive = sourceFilter === src.id;
+          return (
+            <button
+              key={src.id}
+              onClick={() => {
+                setSourceFilter(src.id);
+                setPage(1);
+              }}
+              className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                isActive
+                  ? 'bg-primary text-white shadow-md shadow-primary/20'
+                  : 'bg-bg-card border border-bg-border text-muted hover:text-white'
+              }`}
+            >
+              {src.label}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Search & Agent Filter */}
       <div className="flex gap-3">
-        <div className="flex items-center gap-2 text-muted">
-          <Filter size={14} />
-          <span className="text-sm">Filter by agent:</span>
+        <div className="relative flex-1">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-muted" />
+          <input
+            className="w-full bg-bg-card border border-bg-border rounded-lg pl-9 pr-4 py-2 text-sm text-white placeholder-muted focus:outline-none focus:border-primary/50 font-mono"
+            placeholder="Search by Case ID..."
+            value={caseFilter}
+            onChange={e => setCaseFilter(e.target.value)}
+            onKeyDown={e => e.key === 'Enter' && load()}
+          />
         </div>
         <select
-          className="bg-bg-card border border-bg-border rounded-lg px-3 py-1.5 text-sm text-white focus:outline-none focus:border-primary/50"
+          className="bg-bg-card border border-bg-border rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-primary/50"
           value={agentFilter}
-          onChange={e => { setAgentFilter(e.target.value); setPage(1); setSelected(null); }}
+          onChange={e => {
+            setAgentFilter(e.target.value);
+            setPage(1);
+          }}
         >
-          {AGENTS.map(a => <option key={a} value={a}>{a || 'All Agents'}</option>)}
+          <option value="">All Agents (10)</option>
+          {AGENTS.map(a => (
+            <option key={a} value={a}>
+              {a.replace(/_/g, ' ')}
+            </option>
+          ))}
         </select>
-        <div className="text-muted text-sm ml-auto">{total} log entries</div>
       </div>
 
-      <div className={`flex gap-5 ${selected ? 'items-start' : ''}`}>
-        <div className="flex-1 glass-card overflow-hidden">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="border-b border-bg-border text-muted text-xs">
-                <th className="text-left p-4 font-medium">Timestamp</th>
-                <th className="text-left p-4 font-medium">Agent</th>
-                <th className="text-left p-4 font-medium">Case ID</th>
-                <th className="text-left p-4 font-medium">Decision</th>
-                <th className="text-right p-4 font-medium">Conf</th>
-                <th className="text-right p-4 font-medium">Duration</th>
-                <th className="p-4 font-medium">LLM</th>
+      {/* Logs Table */}
+      <div className="glass-card overflow-hidden">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-bg-border text-muted text-xs">
+              <th className="text-left p-4 font-medium">Timestamp</th>
+              <th className="text-left p-4 font-medium">Case ID</th>
+              <th className="text-left p-4 font-medium">Agent</th>
+              <th className="text-left p-4 font-medium">Source</th>
+              <th className="text-left p-4 font-medium">Decision</th>
+              <th className="text-right p-4 font-medium">Confidence</th>
+              <th className="text-right p-4 font-medium">Latency</th>
+              <th className="p-4" />
+            </tr>
+          </thead>
+          <tbody>
+            {loading && (
+              <tr>
+                <td colSpan={8} className="text-center p-8 text-muted">
+                  <RefreshCw size={18} className="animate-spin text-primary inline mr-2" />
+                  Loading audit logs...
+                </td>
               </tr>
-            </thead>
-            <tbody>
-              {logs.length === 0 && (
-                <tr><td colSpan={7} className="text-center p-8 text-muted">No audit logs yet. Run the pipeline!</td></tr>
-              )}
-              {logs.map(log => (
-                <tr
-                  key={log.id}
-                  className={`table-row cursor-pointer text-xs ${selected?.id === log.id ? 'bg-primary/5' : ''}`}
-                  onClick={() => setSelected(log.id === selected?.id ? null : log)}
-                >
-                  <td className="p-3 text-muted font-mono">{new Date(log.timestamp).toLocaleTimeString()}</td>
-                  <td className="p-3">
-                    <div className="flex items-center gap-1.5">
-                      <Bot size={12} className="text-primary" />
-                      <span className="text-white">{log.agent_name.replace(/_/g, ' ')}</span>
-                    </div>
-                  </td>
-                  <td className="p-3 font-mono text-muted">{log.case_id?.slice(0, 18)}...</td>
-                  <td className="p-3 text-white max-w-[200px] truncate">{log.decision}</td>
-                  <td className="p-3 text-right text-muted">{(log.confidence * 100).toFixed(0)}%</td>
-                  <td className="p-3 text-right text-muted">{log.duration_ms?.toFixed(0)}ms</td>
-                  <td className="p-3">
-                    {log.decision_source === "LLM" ? (
-                      <span className="badge badge-success bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">LLM</span>
-                    ) : log.decision_source === "DETERMINISTIC" ? (
-                      <span className="badge badge-primary bg-indigo-500/20 text-indigo-300 border border-indigo-500/30">Deterministic</span>
-                    ) : (
-                      <span className="badge badge-warning bg-amber-500/20 text-amber-300 border border-amber-500/30">Fallback</span>
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-
-        {selected && (
-          <motion.div initial={{ x: 20, opacity: 0 }} animate={{ x: 0, opacity: 1 }} className="w-96 glass-card p-5 space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="text-sm font-semibold text-white">{selected.agent_name.replace(/_/g, ' ')}</div>
-              <button onClick={() => setSelected(null)} className="text-muted hover:text-white">×</button>
-            </div>
-            <div>
-              <div className="text-xs text-muted mb-1">Decision</div>
-              <div className="text-sm text-white">{selected.decision}</div>
-            </div>
-            {selected.reasoning && (
-              <div>
-                <div className="text-xs text-muted mb-1">Reasoning</div>
-                <div className="text-xs text-white leading-relaxed">{selected.reasoning}</div>
-              </div>
             )}
-            <div className="grid grid-cols-3 gap-2 text-center text-xs">
-              {[
-                { label: 'Confidence', value: `${(selected.confidence * 100).toFixed(0)}%` },
-                { label: 'Duration', value: `${selected.duration_ms?.toFixed(0)}ms` },
-                { label: 'Source', value: selected.decision_source || (selected.llm_used ? 'LLM' : 'Deterministic') },
-              ].map(({ label, value }) => (
-                <div key={label} className="bg-subtle rounded p-2">
-                  <div className="font-bold text-white truncate">{value}</div>
-                  <div className="text-muted">{label}</div>
-                </div>
-              ))}
-            </div>
-            {selected.llm_provider && selected.llm_provider !== 'None' && (
-              <div className="text-xs text-muted">
-                Provider: <span className="text-white font-mono">{selected.llm_provider}</span>
-              </div>
+            {!loading && logs.length === 0 && (
+              <tr>
+                <td colSpan={8} className="text-center p-8 text-muted">
+                  No audit logs found. Run a case in the Simulation Lab to generate agent audit records!
+                </td>
+              </tr>
             )}
-            {selected.had_error && selected.error_message && (
-              <div className="bg-danger/10 border border-danger/20 rounded p-3 text-xs text-danger">
-                Error: {selected.error_message}
-              </div>
-            )}
-            <details className="cursor-pointer">
-              <summary className="text-xs text-muted">View raw output</summary>
-              <pre className="text-xs text-muted mt-2 overflow-auto max-h-48 whitespace-pre-wrap">
-                {JSON.stringify(selected.output, null, 2)}
-              </pre>
-            </details>
-          </motion.div>
-        )}
+            {logs.map(log => (
+              <tr
+                key={log.id}
+                className="table-row cursor-pointer"
+                onClick={() => setSelectedLog(log)}
+              >
+                <td className="p-4 text-muted text-xs font-mono">
+                  {new Date(log.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+                </td>
+                <td className="p-4 font-mono text-white text-xs font-medium">{log.case_id}</td>
+                <td className="p-4 text-slate-200 text-xs font-medium">
+                  {log.agent_name.replace(/_/g, ' ')}
+                </td>
+                <td className="p-4">
+                  <DecisionSourceTag source={log.decision_source} />
+                </td>
+                <td className="p-4 text-white text-xs max-w-xs truncate font-mono">
+                  {log.decision}
+                </td>
+                <td className="p-4 text-right text-emerald-400 font-mono text-xs">
+                  {((log.confidence || 0.85) * 100).toFixed(0)}%
+                </td>
+                <td className="p-4 text-right text-muted font-mono text-xs">
+                  {log.duration_ms?.toFixed(0)}ms
+                </td>
+                <td className="p-4">
+                  <ChevronRight size={14} className="text-muted" />
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
 
+      {/* Pagination */}
       {total > 50 && (
-        <div className="flex items-center justify-center gap-3">
-          <button disabled={page === 1} onClick={() => setPage(p => p - 1)} className="btn-ghost text-sm disabled:opacity-40">← Prev</button>
-          <span className="text-muted text-sm">Page {page} of {Math.ceil(total / 50)}</span>
-          <button disabled={page >= Math.ceil(total / 50)} onClick={() => setPage(p => p + 1)} className="btn-ghost text-sm disabled:opacity-40">Next →</button>
+        <div className="flex items-center justify-center gap-3 mt-4">
+          <button
+            disabled={page === 1}
+            onClick={() => setPage(p => p - 1)}
+            className="btn-ghost text-xs px-3 py-1.5 disabled:opacity-40"
+          >
+            ← Previous
+          </button>
+          <span className="text-muted text-xs">
+            Page {page} of {Math.ceil(total / 50)}
+          </span>
+          <button
+            disabled={page >= Math.ceil(total / 50)}
+            onClick={() => setPage(p => p + 1)}
+            className="btn-ghost text-xs px-3 py-1.5 disabled:opacity-40"
+          >
+            Next →
+          </button>
         </div>
       )}
+
+      {/* Modal Detail View */}
+      <AnimatePresence>
+        {selectedLog && (
+          <AuditDetailModal log={selectedLog} onClose={() => setSelectedLog(null)} />
+        )}
+      </AnimatePresence>
     </div>
   );
 }

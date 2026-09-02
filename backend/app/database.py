@@ -48,18 +48,90 @@ class Base(DeclarativeBase):
 
 
 async def init_db() -> None:
-    """Create all tables on startup."""
+    """Create all tables on startup and apply SQLite column migrations if needed."""
     # Import models so they are registered with Base.metadata
     import app.models  # noqa: F401
+    import sqlalchemy as sa
 
     async with engine.begin() as conn:
         if settings.is_sqlite:
             # Enable WAL mode and foreign keys for SQLite
-            await conn.execute(__import__("sqlalchemy").text("PRAGMA journal_mode=WAL"))
-            await conn.execute(__import__("sqlalchemy").text("PRAGMA foreign_keys=ON"))
+            await conn.execute(sa.text("PRAGMA journal_mode=WAL"))
+            await conn.execute(sa.text("PRAGMA foreign_keys=ON"))
         await conn.run_sync(Base.metadata.create_all)
 
+        if settings.is_sqlite:
+            await _migrate_sqlite_columns(conn)
+
     logger.info(f"Database initialized: {settings.database_url[:50]}")
+
+
+async def _migrate_sqlite_columns(conn) -> None:
+    """Safely ensure any recently added columns exist in existing SQLite tables."""
+    import sqlalchemy as sa
+    tables_cols = {
+        "audit_logs": [
+            ("decision_source", "VARCHAR(32) DEFAULT 'DETERMINISTIC'"),
+            ("step_index", "INTEGER DEFAULT 0"),
+            ("llm_provider", "VARCHAR(64)"),
+            ("llm_model", "VARCHAR(64)"),
+            ("llm_used", "INTEGER DEFAULT 0"),
+            ("used_fallback", "INTEGER DEFAULT 0"),
+            ("input_json", "TEXT"),
+            ("output_json", "TEXT"),
+            ("had_error", "INTEGER DEFAULT 0"),
+            ("error_message", "TEXT"),
+            ("duration_ms", "FLOAT DEFAULT 0.0"),
+        ],
+        "recovery_cases": [
+            ("status", "VARCHAR(32) DEFAULT 'CREATED'"),
+            ("current_step", "VARCHAR(64)"),
+            ("root_cause", "VARCHAR(64)"),
+            ("selected_strategy", "VARCHAR(64)"),
+            ("policy_approved", "BOOLEAN DEFAULT 0"),
+            ("outcome_status", "VARCHAR(32)"),
+            ("recovered_amount", "FLOAT DEFAULT 0.0"),
+            ("recovery_cost", "FLOAT DEFAULT 0.0"),
+            ("revenue_at_risk", "FLOAT DEFAULT 0.0"),
+            ("expected_recovery_value", "FLOAT DEFAULT 0.0"),
+            ("error_count", "INTEGER DEFAULT 0"),
+            ("errors_json", "TEXT"),
+            ("human_escalation_required", "BOOLEAN DEFAULT 0"),
+            ("is_simulation", "BOOLEAN DEFAULT 1"),
+            ("sentinel_output_json", "TEXT"),
+            ("diagnosis_output_json", "TEXT"),
+            ("customer_profile_json", "TEXT"),
+            ("opportunity_score_json", "TEXT"),
+            ("candidate_strategies_json", "TEXT"),
+            ("twin_predictions_json", "TEXT"),
+            ("guardian_decision_json", "TEXT"),
+            ("execution_result_json", "TEXT"),
+            ("learning_update_json", "TEXT"),
+        ],
+        "human_reviews": [
+            ("policy_checks_json", "TEXT"),
+            ("amount_at_risk", "FLOAT DEFAULT 0.0"),
+            ("ai_confidence", "FLOAT DEFAULT 0.5"),
+            ("candidate_strategies_json", "TEXT"),
+            ("twin_predictions_json", "TEXT"),
+            ("ai_recommendation_json", "TEXT"),
+            ("reasoning_summary", "TEXT"),
+            ("reviewer_notes", "TEXT"),
+            ("modified_strategy_json", "TEXT"),
+        ],
+    }
+
+    for table, cols in tables_cols.items():
+        try:
+            res = await conn.execute(sa.text(f"PRAGMA table_info({table})"))
+            existing = {row[1] for row in res.fetchall()}
+            if existing:
+                for col_name, col_def in cols:
+                    if col_name not in existing:
+                        await conn.execute(sa.text(f"ALTER TABLE {table} ADD COLUMN {col_name} {col_def}"))
+        except Exception:
+            pass
+
 
 
 async def get_db():

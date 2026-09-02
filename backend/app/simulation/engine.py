@@ -6,8 +6,22 @@ All metrics are calculated from simulated outcomes — not fabricated.
 
 from __future__ import annotations
 
+import hashlib
 import random
 from typing import Tuple
+
+
+def deterministic_roll(case_id: str, salt: str = "") -> float:
+    """
+    Produce a deterministic float in [0.0, 1.0) derived from sha256(case_id:salt).
+    Guarantees that simulation outcomes are completely reproducible for the same case.
+    """
+    if not case_id:
+        return random.random()
+    h = hashlib.sha256(f"{case_id}:{salt}".encode("utf-8")).hexdigest()
+    # Take first 8 hex characters (32-bit uint) and normalize to [0, 1)
+    val = int(h[:8], 16)
+    return val / 0xFFFFFFFF
 
 
 # Recovery probability matrix: (root_cause, payment_method) → base_probability
@@ -166,6 +180,7 @@ class SimulationEngine:
         payment_method: str,
         root_cause: str,
         success_bonus: float = 0.0,
+        case_id: str = "",
     ) -> Tuple[bool, float]:
         """Return (success, probability_used)."""
         key = (root_cause, payment_method)
@@ -174,7 +189,8 @@ class SimulationEngine:
         if amount < 100:
             base *= 0.7
         prob = min(0.97, base + success_bonus)
-        success = self._rng.random() < prob
+        roll = deterministic_roll(case_id, f"retry:{root_cause}") if case_id else self._rng.random()
+        success = roll < prob
         return success, round(prob, 3)
 
     def simulate_strategy_outcome(
@@ -186,6 +202,7 @@ class SimulationEngine:
         fatigue_score: float,
         amount: float,
         hours_since_failure: float = 1.0,
+        case_id: str = "",
     ) -> Tuple[bool, float]:
         """
         Full strategy simulation.
@@ -222,7 +239,8 @@ class SimulationEngine:
         prob = max(0.05, min(0.97, prob - fatigue_penalty - time_penalty))
 
         # 8. Simulate
-        success = self._rng.random() < prob
+        roll = deterministic_roll(case_id, f"strat:{strategy_type}") if case_id else self._rng.random()
+        success = roll < prob
         return success, round(prob, 3)
 
     def estimate_strategy_cost(

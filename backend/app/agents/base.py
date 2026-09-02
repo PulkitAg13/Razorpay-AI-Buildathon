@@ -133,7 +133,48 @@ class BaseAgent(ABC):
         provider_name = self._llm.provider_name if used_llm else "None"
         model_name = getattr(self._llm, "_model", "None") if used_llm else "None"
 
-        # ── Audit Log ────────────────────────────────────────────────────────
+        # ── Collect Audit Entry dict ─────────────────────────────────────────
+        from datetime import datetime, timezone
+        safe_input = {
+            k: v for k, v in state.items()
+            if k in ("case_id", "event_data", "current_step", "error_count")
+        }
+        
+        PIPELINE_AGENT_ORDER = {
+            "revenue_sentinel": 1,
+            "root_cause_diagnosis": 2,
+            "customer_context_intelligence": 3,
+            "recovery_opportunity": 4,
+            "recovery_strategy_planner": 5,
+            "recovery_digital_twin": 6,
+            "compliance_policy_guardian": 7,
+            "recovery_execution": 8,
+            "outcome_monitor": 9,
+            "learning_optimization": 10,
+        }
+        step_index = PIPELINE_AGENT_ORDER.get(self.agent_name, 0)
+
+        audit_dict = {
+            "case_id": state.get("case_id", "unknown"),
+            "agent_name": self.agent_name,
+            "step_index": step_index,
+            "decision": self._get_decision_summary(output),
+            "reasoning": self._get_reasoning(output),
+            "confidence": self._get_confidence(output),
+            "decision_source": decision_source,
+            "llm_provider": provider_name,
+            "llm_model": model_name,
+            "llm_used": bool(used_llm),
+            "used_fallback": bool(used_fallback),
+            "input_json": json.dumps(safe_input, default=str),
+            "output_json": output.model_dump_json(),
+            "had_error": bool(error_message is not None and not used_fallback),
+            "error_message": error_message,
+            "duration_ms": duration_ms,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+        # ── Audit Log to DB if session provided ──────────────────────────────
         if db is not None:
             try:
                 await self._write_audit_log(
@@ -148,6 +189,7 @@ class BaseAgent(ABC):
                     used_fallback=used_fallback,
                     error_message=error_message,
                     duration_ms=duration_ms,
+                    step_index=step_index,
                 )
             except Exception as ae:
                 logger.warning(f"[{self.agent_name}] Audit log write failed: {ae}")
@@ -156,6 +198,11 @@ class BaseAgent(ABC):
         update = self._build_state_update(output, state)
         update["current_step"] = self.agent_name
         update["decision_source"] = decision_source
+        
+        # Accumulate audit logs in workflow state
+        existing_audits = list(state.get("audit_entries", []))
+        existing_audits.append(audit_dict)
+        update["audit_entries"] = existing_audits
 
         # ── Publish event ────────────────────────────────────────────────────
         try:
@@ -183,6 +230,7 @@ class BaseAgent(ABC):
         used_fallback: bool,
         error_message: Optional[str],
         duration_ms: float,
+        step_index: int = 0,
     ) -> None:
         """Write an immutable audit entry with full AI transparency metadata."""
         safe_input = {
@@ -193,12 +241,13 @@ class BaseAgent(ABC):
         log = AuditLog(
             case_id=case_id,
             agent_name=self.agent_name,
+            step_index=step_index,
             decision=self._get_decision_summary(output),
             reasoning=self._get_reasoning(output),
             confidence=self._get_confidence(output),
             decision_source=decision_source,
             llm_provider=llm_provider,
-            llm_model=model_name if 'model_name' in locals() else llm_model,
+            llm_model=llm_model,
             llm_used=int(used_llm),
             used_fallback=int(used_fallback),
             input_json=json.dumps(safe_input, default=str),
